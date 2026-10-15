@@ -15,27 +15,18 @@ class LLMService:
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         self.api_key = (api_key or settings.LLM_API_KEY).strip()
         raw_model = (model_name or settings.LLM_MODEL).strip()
-        # Normalize model to stable Gemini versions if an invalid experimental tag was given
-        if raw_model in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"]:
-            self.model_name = raw_model
-        else:
-            self.model_name = "gemini-1.5-flash"
-
+        self.model_name = raw_model or "gemini-3.5-flash"
         self._client_initialized = False
 
-        # Google AI Studio Gemini API keys begin with 'AIzaSy'
-        if self.api_key and self.api_key != "your_gemini_api_key_here" and self.api_key.startswith("AIzaSy"):
+        if self.api_key and self.api_key != "your_gemini_api_key_here":
+            self._client_initialized = True
+            logger.info(f"Initialized LLM service with primary model: {self.model_name}")
             try:
                 genai.configure(api_key=self.api_key)
-                self._client_initialized = True
-                logger.info(f"Configured Google Gemini client with model: {self.model_name}")
             except Exception as e:
-                logger.warning(f"Could not configure Google GenAI client: {e}")
+                logger.warning(f"GenAI configure warning: {e}")
         else:
-            if self.api_key and self.api_key != "your_gemini_api_key_here":
-                logger.info("Provided LLM_API_KEY is not a Google AI Studio API key (starts with 'AIzaSy'). Using intelligent local contextual fallback engine.")
-            else:
-                logger.info("No Gemini API key supplied. Running on intelligent local contextual fallback engine.")
+            logger.info("No Gemini API key supplied. Running on intelligent local contextual fallback engine.")
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
         """Safely extract and parse JSON object from LLM response text."""
@@ -59,44 +50,37 @@ class LLMService:
         return json.loads(cleaned)
 
     def _call_gemini(self, prompt: str) -> str:
-        """Execute prompt against Gemini model with strict timeouts."""
+        """Execute prompt against Gemini model with cascading fallback and strict timeouts."""
         if not self._client_initialized:
             raise RuntimeError("Gemini API key is not configured or client initialization failed.")
 
-        # 1. Try fast HTTPS REST call with strict 8-second timeout
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
-        try:
-            with httpx.Client(timeout=8.0) as client:
-                resp = client.post(
-                    url,
-                    json={"contents": [{"parts": [{"text": prompt}]}]},
-                    headers={"Content-Type": "application/json"}
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts and "text" in parts[0]:
-                            return parts[0]["text"]
-                logger.warning(f"Gemini REST returned status {resp.status_code}: {resp.text[:150]}")
-        except Exception as e:
-            logger.warning(f"Gemini REST request error: {e}")
+        # Candidate models to try in order (e.g. try user's requested model, then gemini-3.5-flash)
+        models_to_try = [self.model_name]
+        for fallback_m in ["gemini-3.5-flash", "gemini-3.8-flash"]:
+            if fallback_m not in models_to_try:
+                models_to_try.append(fallback_m)
 
-        # 2. Try SDK call with strict timeout as secondary option
-        try:
-            model = genai.GenerativeModel(self.model_name)
-            response = model.generate_content(
-                prompt,
-                generation_config={"temperature": 0.3},
-                request_options={"timeout": 6}
-            )
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            logger.warning(f"GenAI SDK call error: {e}")
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+            try:
+                with httpx.Client(timeout=6.0) as client:
+                    resp = client.post(
+                        url,
+                        json={"contents": [{"parts": [{"text": prompt}]}]},
+                        headers={"Content-Type": "application/json"}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts and "text" in parts[0]:
+                                return parts[0]["text"]
+                    logger.warning(f"Model '{model}' returned status {resp.status_code}: {resp.text[:120]}")
+            except Exception as e:
+                logger.warning(f"Model '{model}' timed out or errored: {e}")
 
-        raise RuntimeError("Gemini API call timed out or failed to return text.")
+        raise RuntimeError("All Gemini candidate models timed out or failed to return text.")
 
     def generate_initial_question(
         self,
