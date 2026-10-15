@@ -32,27 +32,36 @@ class InterviewService:
         if not job:
             raise ValueError(f"Job with id {job_id} does not exist.")
 
+        # Check if an in-progress interview already exists for this candidate and job
+        existing = db.query(Interview).filter(
+            Interview.candidate_id == candidate_id,
+            Interview.job_id == job_id,
+            Interview.status == InterviewStatus.IN_PROGRESS
+        ).first()
+
+        if existing and existing.questions:
+            return existing
+
         # Check candidate latest resume
         resume = self.resume.get_candidate_latest_resume(db, candidate_id)
         resume_text = resume.extracted_text if resume else ""
 
-        # Create Interview record
-        interview = Interview(
-            candidate_id=candidate_id,
-            job_id=job_id,
-            status=InterviewStatus.IN_PROGRESS
-        )
-        db.add(interview)
-        db.commit()
-        db.refresh(interview)
-
-        # Generate initial question via LLM
+        # Generate initial question via LLM (with instant fallback if LLM is offline/invalid)
         q1_data = self.llm.generate_initial_question(
             job_title=job.title,
             job_description=job.description,
             required_skills=job.required_skills,
             resume_text=resume_text
         )
+
+        interview = existing or Interview(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            status=InterviewStatus.IN_PROGRESS
+        )
+        if not existing:
+            db.add(interview)
+            db.flush()
 
         q1 = Question(
             interview_id=interview.id,
