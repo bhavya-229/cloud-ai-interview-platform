@@ -198,6 +198,16 @@ Return ONLY valid JSON matching this schema:
         resume_text: str = ""
     ) -> LLMEvaluationOutput:
         """Evaluate a candidate's answer using structured output."""
+        clean = answer_text.strip().lower()
+        ignorance_tokens = [
+            "sorry", "i dont know", "i don't know", "dont know", "dont remember",
+            "i dont remember", "i don't remember", "no idea", "pass", "skip",
+            "idk", "not sure", "cant remember", "can't remember", "no clue",
+            "i do not know", "i do not remember", "none", "na", "n/a", "nothing"
+        ]
+        words = clean.split()
+        is_non_answer = clean in ignorance_tokens or (len(words) <= 4 and any(w in clean for w in ["sorry", "dont know", "don't know", "dont remember", "don't remember", "no idea", "idk", "cant remember"]))
+
         prompt = f"""
 You are an expert hiring evaluator assessing an interview answer for a "{job_title}" role.
 Required Skills: {required_skills}
@@ -209,16 +219,20 @@ Candidate's Submitted Answer:
 "{answer_text}"
 
 Evaluate this answer rigorously on technical accuracy, clarity, completeness, and practical relevance.
-Score must be a float from 0.0 to 10.0:
-- 9.0 - 10.0: Outstanding, deeply comprehensive, covers edge cases and nuances.
-- 7.0 - 8.9: Good, solid understanding with minor omissions.
-- 5.0 - 6.9: Acceptable/Partial, basic concepts grasped but lacks depth or has minor inaccuracies.
-- 0.0 - 4.9: Inadequate, incorrect, excessively brief, or off-topic.
+
+CRITICAL SCORING RULE:
+- If the candidate writes 'sorry', 'i don't know', 'i don't remember', 'pass', 'skip', leaves it blank, or admits lack of knowledge, the score MUST BE EXACTLY 0.0 out of 10.0.
+- In this case, strengths must be an empty list []. Do not award participation points for apologizing or admitting ignorance.
+- For legitimate technical answers:
+  * 9.0 - 10.0: Outstanding, deeply comprehensive, covers edge cases and nuances.
+  * 7.0 - 8.9: Good, solid understanding with minor omissions.
+  * 5.0 - 6.9: Acceptable/Partial, basic concepts grasped but lacks depth.
+  * 0.0 - 4.9: Inadequate, incorrect, excessively brief, or off-topic.
 
 Return ONLY valid JSON matching this schema:
 {{
   "score": float (between 0.0 and 10.0),
-  "correctness": "Excellent" or "Good" or "Partial" or "Poor",
+  "correctness": "Excellent" or "Good" or "Partial" or "Poor" or "No Answer",
   "strengths": ["string", "string"],
   "weaknesses": ["string", "string"],
   "feedback": "string (constructive feedback explaining what was good and what was missing)"
@@ -233,14 +247,24 @@ Return ONLY valid JSON matching this schema:
                 logger.error(f"LLM API evaluation error: {e}")
 
         # Resilient fallback evaluation
-        ans_len = len(answer_text.strip().split())
-        if ans_len < 5:
-            score = 3.0
+        if is_non_answer or len(words) == 0:
+            return LLMEvaluationOutput(
+                score=0.0,
+                correctness="No Answer / Unanswered",
+                strengths=[],
+                weaknesses=[
+                    "Candidate stated they did not know or recall this technical topic.",
+                    "No technical attempt or conceptual explanation provided."
+                ],
+                feedback="The candidate was unable to provide an answer to this question. Core familiarity with this required competency was not demonstrated."
+            )
+        elif len(words) < 5:
+            score = 2.0
             correctness = "Poor"
-            strengths = ["Attempted a brief answer"]
+            strengths = ["Provided a very brief attempt"]
             weaknesses = ["Answer was far too concise without technical depth or examples"]
             feedback = "Please elaborate further with concrete explanations and real-world implementation details."
-        elif ans_len < 25:
+        elif len(words) < 25:
             score = 6.0
             correctness = "Partial"
             strengths = ["Addressed the basic premise of the question"]
@@ -287,6 +311,8 @@ Full Interview Transcript & Evaluations:
 {history_summary}
 
 Synthesize this candidate's overall performance into an executive assessment report.
+If the candidate failed to answer most or all questions (score near 0), recommendation MUST be "Do Not Hire", and technical_strengths must accurately reflect lack of demonstrated knowledge.
+
 Return ONLY valid JSON matching this schema:
 {{
   "overall_performance": "string (executive performance summary)",
@@ -309,21 +335,39 @@ Return ONLY valid JSON matching this schema:
         if overall_score >= 8.0:
             rec = "Strong Hire"
             perf = "Demonstrated strong domain competence and practical technical depth."
+            strengths = ["Clear communication style", "In-depth knowledge of core systems"]
+            weaknesses = ["Minor edge-case coverage"]
+            topics = ["Advanced distributed system patterns"]
         elif overall_score >= 6.5:
             rec = "Hire"
             perf = "Good conceptual knowledge across most required competencies with minor areas for growth."
-        elif overall_score >= 5.0:
+            strengths = ["Solid grasp of key frameworks", "Practical coding familiarity"]
+            weaknesses = ["Could deepen architectural trade-off discussions"]
+            topics = ["System optimization and scale"]
+        elif overall_score >= 4.0:
             rec = "Consider"
-            perf = "Demonstrated foundational skills but showed gaps in advanced areas."
+            perf = "Demonstrated foundational skills but showed gaps in intermediate/advanced areas."
+            strengths = ["Basic familiarity with primary tools"]
+            weaknesses = ["Lacks depth in advanced concepts and optimization"]
+            topics = ["Comprehensive review of core frameworks"]
         else:
             rec = "Do Not Hire"
-            perf = "Significant knowledge gaps identified in core required skills."
+            perf = "The candidate demonstrated severe technical knowledge gaps and was unable to answer key questions for this role."
+            strengths = ["Candidate was transparent about knowledge boundaries"] if overall_score > 0 else []
+            weaknesses = [
+                "Unable to answer fundamental and practical technical questions across tested topics",
+                "Lacks required technical competence for this position"
+            ]
+            topics = [
+                f"Fundamental study of {required_skills or 'core programming concepts'}",
+                "Hands-on project development and foundational implementation"
+            ]
 
         return LLMFinalAssessmentOutput(
             overall_performance=perf,
-            technical_strengths=["Clear communication style", "Foundational grasp of key concepts"],
-            weak_areas=["Edge-case analysis", "Architectural trade-off discussions"],
-            topics_to_improve=["Deep dive into system optimization", "Hands-on implementation nuance"],
+            technical_strengths=strengths,
+            weak_areas=weaknesses,
+            topics_to_improve=topics,
             interview_summary=f"The candidate completed the assessment for {job_title} with an average score of {overall_score:.1f}/10.",
             recommendation=rec
         )
