@@ -78,6 +78,16 @@ a {
   border: 1px solid #cbd5e1;
 }
 
+.badge-cloud {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background-color: #ecfdf5;
+  color: #047857;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid #a7f3d0;
+}
+
 .nav-links {
   display: flex;
   align-items: center;

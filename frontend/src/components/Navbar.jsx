@@ -6,6 +6,20 @@ import { Cpu, LogOut, Briefcase, FileText, LayoutDashboard, Users } from 'lucide
 export default function Navbar() {
   const { user, isAuthenticated, role, logout } = useAuth();
   const navigate = useNavigate();
+  const [platformMode, setPlatformMode] = React.useState('AWS Cloud');
+
+  React.useEffect(() => {
+    fetch('/api/health')
+      .then(res => res.json())
+      .then(data => {
+        if (data.storage === 's3' || data.database?.includes('rds')) {
+          setPlatformMode('AWS Cloud');
+        } else {
+          setPlatformMode('Local Mode');
+        }
+      })
+      .catch(() => setPlatformMode('AWS Cloud'));
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -18,7 +32,9 @@ export default function Navbar() {
         <Link to="/" className="brand-logo">
           <Cpu className="brand-icon" />
           <span className="brand-text">AI Interview Platform</span>
-          <span className="badge-local">Local Mode</span>
+          <span className={platformMode === 'AWS Cloud' ? 'badge-cloud' : 'badge-local'}>
+            {platformMode}
+          </span>
         </Link>
 
         <div className="nav-links">
