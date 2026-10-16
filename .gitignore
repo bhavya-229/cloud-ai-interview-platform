@@ -22,9 +22,10 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.pytest_cache/
+*.pytest_cache/
 .coverage
 htmlcov/
+*.zip
 
 # Node / Frontend
 node_modules/

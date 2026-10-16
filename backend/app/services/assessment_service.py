@@ -66,4 +66,19 @@ class AssessmentService:
         db.add(interview)
         db.commit()
         db.refresh(interview)
+
+        # Dispatch real-time alert via Amazon SNS (if configured)
+        try:
+            from app.services.notification_service import notification_service
+            cand_name = interview.candidate.name if interview.candidate else f"Candidate #{interview.candidate_id}"
+            notification_service.notify_interview_completed(
+                candidate_name=cand_name,
+                job_title=job_title,
+                overall_score=overall_score,
+                recommendation=report_output.recommendation,
+                interview_id=interview.id
+            )
+        except Exception as e:
+            logger.warning(f"Could not dispatch interview completion alert: {e}")
+
         return interview

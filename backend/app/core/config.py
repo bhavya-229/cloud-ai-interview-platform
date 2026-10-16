@@ -23,7 +23,12 @@ class Settings(BaseSettings):
 
     # Storage Abstraction
     UPLOAD_DIR: str = "uploads"
-    STORAGE_BACKEND: str = "local"  # 'local' currently, 's3' in future cloud phase
+    STORAGE_BACKEND: str = "local"  # 'local' or 's3'
+
+    # AWS Cloud Configuration
+    AWS_REGION: str = "us-east-1"
+    S3_BUCKET_NAME: str = ""
+    SNS_TOPIC_ARN: str = ""
 
     # CORS
     ALLOWED_ORIGINS: Union[List[str], str] = [

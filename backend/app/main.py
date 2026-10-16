@@ -50,21 +50,49 @@ app.include_router(candidates.router, prefix=settings.API_V1_STR)
 app.include_router(recruiters.router, prefix=settings.API_V1_STR)
 
 
+import os
+from starlette.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+# Dist directory path for built React frontend
+frontend_dist = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "frontend", "dist")
+assets_dir = os.path.join(frontend_dist, "assets")
+if os.path.isdir(assets_dir):
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
 @app.get("/")
 def root():
+    index_html = os.path.join(frontend_dist, "index.html")
+    if os.path.exists(index_html):
+        return FileResponse(index_html)
     return {
         "name": settings.PROJECT_NAME,
         "status": "online",
-        "mode": "local",
+        "storage": settings.STORAGE_BACKEND,
         "docs_url": "/docs"
     }
 
 
 @app.get("/api/health")
 def health_check():
+    db_type = "sqlite" if settings.DATABASE_URL.startswith("sqlite") else "postgresql (rds)"
     return {
         "status": "healthy",
         "storage": settings.STORAGE_BACKEND,
-        "database": "sqlite (local)",
+        "database": db_type,
+        "aws_region": settings.AWS_REGION,
         "question_target": settings.INTERVIEW_QUESTION_COUNT
     }
+
+
+if os.path.isdir(frontend_dist):
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not found")
+        target_file = os.path.join(frontend_dist, full_path)
+        if full_path and os.path.isfile(target_file):
+            return FileResponse(target_file)
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
